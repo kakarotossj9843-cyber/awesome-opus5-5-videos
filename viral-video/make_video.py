@@ -12,7 +12,7 @@ G = 2600.0                             # gravity px/s^2
 GROW = 0.72                             # px added to ball radius per bounce
 R0 = 16.0
 SUB = 16                               # physics substeps per frame
-OUTRO = 6.5                            # seconds after the ball fills the circle
+OUTRO = 6.6                            # seconds after the ball fills the circle
 SR = 44100
 random.seed(7)
 
@@ -71,12 +71,12 @@ VOICE_RATE = "+12%"
 VOICE = [  # (start seconds, line) -- "FILL" = relative to the moment the circle fills
     (0.25, "Cada rebote hace esta bola más grande."),
     (3.3,  "¿Crees que llenará todo el círculo?"),
-    (6.3,  "Comenta tu número antes de que termine."),
+    (6.3,  "¿Cuántos rebotes necesitará? Comenta tu número."),
     (11.6, "¡Ya va por la mitad!"),
     (14.0, "Y cada vez rebota más rápido..."),
     (16.6, "¡Casi... casi!"),
     ("FILL+0.15", "¡Lo logró!"),
-    ("FILL+1.95", "¿Cuántos rebotes adivinaste? Te leo en comentarios."),
+    ("FILL+1.95", "¡Cuatrocientos sesenta y siete! ¿Acertaste?"),
 ]
 
 def load_voice():
@@ -107,7 +107,8 @@ def load_voice():
     return clips
 
 voice_clips = load_voice()
-CAPTIONS = [(s, s + len(a) / SR, l) for s, l, a in voice_clips]
+CAPTION_TEXT = {"¡Cuatrocientos sesenta y siete! ¿Acertaste?": "¡467! ¿Acertaste?"}  # on-screen version
+CAPTIONS = [(s, s + len(a) / SR, CAPTION_TEXT.get(l, l)) for s, l, a in voice_clips]
 
 # ---------------- audio ----------------
 def synth(total):
@@ -285,8 +286,8 @@ def render(out_path):
             text(ctx, "¡LO LOGRÓ!", W/2, 330, 150 * (0.5 + 0.5*k), rgba=(1,1,1,1), stroke=14)
             if t - done_t > 0.9:
                 k2 = ease_out((t - done_t - 0.9) / 0.4)
-                text(ctx, "¿Adivinaste cuántos rebotes?", W/2, 1760, 56, rgba=(1,1,1,k2))
-                text(ctx, "Escríbelo en comentarios ↓", W/2, 1840, 50, rgba=(*hsv(hue,0.5),k2), weight=cairo.FONT_WEIGHT_NORMAL)
+                text(ctx, "¿Acertaste? Dímelo abajo", W/2, 1760, 56, rgba=(1,1,1,k2))
+                text(ctx, "Comenta tu número antes de verlo ↓", W/2, 1840, 50, rgba=(*hsv(hue,0.5),k2), weight=cairo.FONT_WEIGHT_NORMAL)
 
         # spoken-line captions (TikTok style)
         for c0, c1, line in CAPTIONS:
@@ -304,8 +305,15 @@ def render(out_path):
         # counter + progress bar
         cy0 = 1600
         sc = 1 + 0.18 * flash
-        text(ctx, f"{n}", W/2, cy0, 120 * sc, rgba=(1,1,1,1), stroke=8)
-        text(ctx, "REBOTES", W/2, cy0 + 55, 40, rgba=(1,1,1,0.7), weight=cairo.FONT_WEIGHT_NORMAL)
+        if not finished:
+            # hidden counter: the total is the guessing game, revealed at the end
+            text(ctx, "???", W/2, cy0, 120 * sc, rgba=(1,1,1,1), stroke=8)
+        else:
+            rk = ease_out((t - done_t) / 1.2)      # fast count-up reveal
+            shown = int(round(n * rk))
+            pulse = 1 + 0.25 * max(0, 1 - abs(t - done_t - 1.25) / 0.25)
+            text(ctx, f"{shown}", W/2, cy0, 130 * pulse, rgba=(1, 0.92, 0.3, 1), stroke=10)
+        text(ctx, "REBOTES" if finished else "REBOTES TOTALES", W/2, cy0 + 55, 40, rgba=(1,1,1,0.7), weight=cairo.FONT_WEIGHT_NORMAL)
         if not finished:
             bx, bw = 190, W - 380
             ctx.set_source_rgba(1,1,1,0.15); ctx.rectangle(bx, 1745, bw, 16); ctx.fill()
