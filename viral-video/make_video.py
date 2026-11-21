@@ -9,10 +9,10 @@ import cairo
 W, H, FPS = 1080, 1920, 60
 CX, CY, R = W / 2, 1010, 430          # arena
 G = 2600.0                             # gravity px/s^2
-GROW = 1.3                             # px added to ball radius per bounce
+GROW = 0.72                             # px added to ball radius per bounce
 R0 = 16.0
 SUB = 16                               # physics substeps per frame
-OUTRO = 3.2                            # seconds after the ball fills the circle
+OUTRO = 6.5                            # seconds after the ball fills the circle
 SR = 44100
 random.seed(7)
 
@@ -48,7 +48,7 @@ def simulate():
                         vx, vy = vx / sp * target, vy / sp * target
                         vx += -ny * 40; vy += nx * 40
                         n += 1
-                        r = min(R - 3, r + GROW)
+                        r = min(R - 3, r + GROW * (0.25 + 3.2 * (R - r) / R))
                         bounces.append((t, n, r))
                         if r >= R - 3:
                             done_t = t
@@ -64,6 +64,50 @@ def simulate():
 
 frames, bounces, done_t = simulate()
 print(f"frames={len(frames)} duration={len(frames)/FPS:.1f}s bounces={len(bounces)} fill_at={done_t:.1f}s")
+
+# ---------------- voice-over (free neural TTS via edge-tts) ----------------
+VOICE_NAME = "es-MX-JorgeNeural"
+VOICE_RATE = "+12%"
+VOICE = [  # (start seconds, line) -- "FILL" = relative to the moment the circle fills
+    (0.25, "Cada rebote hace esta bola más grande."),
+    (3.3,  "¿Crees que llenará todo el círculo?"),
+    (6.3,  "Comenta tu número antes de que termine."),
+    (11.6, "¡Ya va por la mitad!"),
+    (14.0, "Y cada vez rebota más rápido..."),
+    (16.6, "¡Casi... casi!"),
+    ("FILL+0.15", "¡Lo logró!"),
+    ("FILL+1.95", "¿Cuántos rebotes adivinaste? Te leo en comentarios."),
+]
+
+def load_voice():
+    import hashlib, ssl, asyncio
+    cache = os.path.join(os.path.dirname(os.path.abspath(__file__)), "voice_cache")
+    os.makedirs(cache, exist_ok=True)
+    clips = []
+    for start, line in VOICE:
+        if isinstance(start, str):
+            start = done_t + float(start.split("+")[1])
+        key = hashlib.md5(f"{VOICE_NAME}|{VOICE_RATE}|{line}".encode()).hexdigest()[:12]
+        mp3 = os.path.join(cache, key + ".mp3")
+        if not os.path.exists(mp3):
+            import edge_tts, edge_tts.communicate as ec
+            ca = "/root/.ccr/ca-bundle.crt"
+            if os.path.exists(ca):
+                ec._SSL_CTX = ssl.create_default_context(cafile=ca)
+            asyncio.run(edge_tts.Communicate(line, VOICE_NAME, rate=VOICE_RATE).save(mp3))
+        raw = subprocess.run(["ffmpeg", "-v", "error", "-i", mp3, "-af",
+                              "silenceremove=start_periods=1:start_threshold=-45dB",
+                              "-f", "f32le", "-ac", "1", "-ar", str(SR), "-"],
+                             capture_output=True, check=True).stdout
+        a = np.frombuffer(raw, np.float32).copy()
+        clips.append((start, line, a))
+    for (s1, l1, a1), (s2, _, _) in zip(clips, clips[1:]):
+        if s1 + len(a1) / SR > s2:
+            print(f"WARNING voice overlap: '{l1}' ends {s1+len(a1)/SR:.2f}s > next {s2:.2f}s")
+    return clips
+
+voice_clips = load_voice()
+CAPTIONS = [(s, s + len(a) / SR, l) for s, l, a in voice_clips]
 
 # ---------------- audio ----------------
 def synth(total):
@@ -107,6 +151,17 @@ def synth(total):
     out[s:s+len(fin)] += fin[:N - s]
     out = out[:int(total * SR)]
     out /= max(1e-6, np.abs(out).max()) / 0.9
+    # duck music under the voice, then add voice on top
+    duck = np.ones(len(out), np.float32)
+    vo = np.zeros(len(out), np.float32)
+    for s0, _, a in voice_clips:
+        i = int(s0 * SR); seg = a[:len(out) - i]
+        vo[i:i+len(seg)] += seg
+        duck[max(0, i - 2000):i + len(seg) + 4000] = 0.35
+    duck = np.convolve(duck, np.ones(2205) / 2205, mode="same").astype(np.float32)
+    vo /= max(1e-6, np.abs(vo).max())
+    out = out * duck * 0.8 + vo * 0.95
+    out /= max(1.0, np.abs(out).max() / 0.97)
     return out
 
 # ---------------- drawing ----------------
@@ -232,6 +287,19 @@ def render(out_path):
                 k2 = ease_out((t - done_t - 0.9) / 0.4)
                 text(ctx, "¿Adivinaste cuántos rebotes?", W/2, 1760, 56, rgba=(1,1,1,k2))
                 text(ctx, "Escríbelo en comentarios ↓", W/2, 1840, 50, rgba=(*hsv(hue,0.5),k2), weight=cairo.FONT_WEIGHT_NORMAL)
+
+        # spoken-line captions (TikTok style)
+        for c0, c1, line in CAPTIONS:
+            if c0 <= t <= c1 + 0.15:
+                k = ease_out((t - c0) / 0.15)
+                words = line.split(); lines = [""]
+                for wd in words:
+                    if len(lines[-1]) + len(wd) > 22: lines.append(wd)
+                    else: lines[-1] = (lines[-1] + " " + wd).strip()
+                base = 1010 if not finished else 1010 - (len(lines) - 1) * 40
+                for li, ln in enumerate(lines):
+                    text(ctx, ln, W/2, base + li * 80 - (len(lines) - 1) * 40, 66 * (0.85 + 0.15*k),
+                         rgba=(1, 1, 1, k), stroke=16)
 
         # counter + progress bar
         cy0 = 1600
